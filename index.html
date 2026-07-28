@@ -254,6 +254,25 @@
           <input type="range" id="clicksSlider" min="3" max="50" value="10" step="1">
           <div class="helptext">点击数达到此值仍 0 转化，才建议否定</div>
         </div>
+        <div class="field">
+          <label>货币单位</label>
+          <select id="currencySelect">
+            <option value="auto">自动识别（默认）</option>
+            <option value="¥">¥ 人民币 / CNY</option>
+            <option value="$">$ 美元 / USD</option>
+            <option value="€">€ 欧元 / EUR</option>
+            <option value="£">£ 英镑 / GBP</option>
+            <option value="₹">₹ 印度卢比 / INR</option>
+            <option value="₩">₩ 韩元 / KRW</option>
+            <option value="฿">฿ 泰铢 / THB</option>
+            <option value="HK$">HK$ 港币 / HKD</option>
+            <option value="A$">A$ 澳元 / AUD</option>
+            <option value="custom">自定义符号…</option>
+          </select>
+          <input type="text" id="customCurrencyInput" placeholder="输入符号，如 R$" maxlength="5"
+                 style="display:none;margin-top:8px;width:100%;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:14px;">
+          <div class="helptext">如果你的数据里花费/销售额是纯数字、没有货币符号，自动识别会默认按 ¥ 处理，此时请在这里手动选择</div>
+        </div>
       </div>
     </div>
     <div class="btn-row">
@@ -344,6 +363,7 @@
   // ---------------- State ----------------
   let rawHeaders = [];
   let rawRows = [];
+  let rawRowsFormatted = [];
   let mapping = {keyword:null, campaign:null, impressions:null, clicks:null, spend:null, orders:null, sales:null, acos:null, cvr:null};
   let processed = [];
   let thresholds = {cvr:0.10, acos:0.30, minClicks:10};
@@ -377,6 +397,31 @@
   const cvrVal = document.getElementById('cvrVal');
   const acosVal = document.getElementById('acosVal');
   const clicksVal = document.getElementById('clicksVal');
+  const currencySelect = document.getElementById('currencySelect');
+  const customCurrencyInput = document.getElementById('customCurrencyInput');
+  let manualCurrency = 'auto';
+
+  currencySelect.addEventListener('change', ()=>{
+    if(currencySelect.value === 'custom'){
+      customCurrencyInput.style.display = 'block';
+      manualCurrency = customCurrencyInput.value.trim() || 'auto';
+    } else {
+      customCurrencyInput.style.display = 'none';
+      manualCurrency = currencySelect.value;
+    }
+    if(processed.length){ applyCurrencyChoice(); renderAll(); }
+  });
+  customCurrencyInput.addEventListener('input', ()=>{
+    manualCurrency = customCurrencyInput.value.trim() || 'auto';
+    if(processed.length){ applyCurrencyChoice(); renderAll(); }
+  });
+  function applyCurrencyChoice(){
+    if(manualCurrency !== 'auto'){
+      currencySymbol = manualCurrency;
+    } else {
+      currencySymbol = detectCurrencySymbol(rawRows, mapping);
+    }
+  }
 
   cvrSlider.addEventListener('input', ()=>{cvrVal.textContent = cvrSlider.value+'%';});
   acosSlider.addEventListener('input', ()=>{acosVal.textContent = acosSlider.value+'%';});
@@ -403,6 +448,7 @@
         complete: (res)=>{
           rawHeaders = res.meta.fields || [];
           rawRows = res.data;
+          rawRowsFormatted = res.data;
           onParsed(file.name);
         },
         error: (err)=>{ statusTxt.textContent = '解析失败：'+err.message; }
@@ -414,7 +460,9 @@
           const wb = XLSX.read(e.target.result, {type:'array'});
           const sheet = wb.Sheets[wb.SheetNames[0]];
           const json = XLSX.utils.sheet_to_json(sheet, {defval:''});
+          const jsonFormatted = XLSX.utils.sheet_to_json(sheet, {defval:'', raw:false});
           rawRows = json;
+          rawRowsFormatted = jsonFormatted;
           rawHeaders = json.length ? Object.keys(json[0]) : [];
           onParsed(file.name);
         }catch(err){
@@ -522,21 +570,22 @@
 
   // ---------------- Currency detection ----------------
   const CURRENCY_MAP = [
-    {symbol:'¥', tests:[/¥/, /\bRMB\b/i, /\bCNY\b/i, /\bCN¥/i]},
-    {symbol:'$', tests:[/\$/, /\bUSD\b/i]},
-    {symbol:'€', tests:[/€/, /\bEUR\b/i]},
-    {symbol:'£', tests:[/£/, /\bGBP\b/i]},
-    {symbol:'₹', tests:[/₹/, /\bINR\b/i]},
-    {symbol:'₩', tests:[/₩/, /\bKRW\b/i]},
-    {symbol:'฿', tests:[/฿/, /\bTHB\b/i]},
-    {symbol:'HK$', tests:[/\bHK\$/i, /\bHKD\b/i]},
-    {symbol:'A$', tests:[/\bA\$/i, /\bAUD\b/i]}
+    {symbol:'¥', tests:[/¥/, /\uFFE5/, /元/, /\bRMB\b/i, /\bCNY\b/i, /人民币/]},
+    {symbol:'$', tests:[/\$/, /\bUSD\b/i, /美元/, /美金/]},
+    {symbol:'€', tests:[/€/, /\bEUR\b/i, /欧元/]},
+    {symbol:'£', tests:[/£/, /\bGBP\b/i, /英镑/]},
+    {symbol:'₹', tests:[/₹/, /\bINR\b/i, /卢比/]},
+    {symbol:'₩', tests:[/₩/, /\bKRW\b/i, /韩元/]},
+    {symbol:'฿', tests:[/฿/, /\bTHB\b/i, /泰铢/]},
+    {symbol:'HK$', tests:[/\bHK\$/i, /\bHKD\b/i, /港元/, /港币/]},
+    {symbol:'A$', tests:[/\bA\$/i, /\bAUD\b/i, /澳元/]}
   ];
   function detectCurrencySymbol(rows, map){
     const cols = [map.spend, map.sales].filter(Boolean);
+    const source = (rawRowsFormatted && rawRowsFormatted.length === rows.length) ? rawRowsFormatted : rows;
     for(const col of cols){
-      for(let i=0; i<Math.min(rows.length, 30); i++){
-        const raw = rows[i][col];
+      for(let i=0; i<Math.min(source.length, 30); i++){
+        const raw = source[i][col];
         if(raw===undefined || raw===null || raw==='') continue;
         const s = String(raw);
         for(const c of CURRENCY_MAP){
@@ -553,7 +602,7 @@
       alert('请至少映射 关键词 / 点击量 / 花费 三个必填字段');
       return false;
     }
-    currencySymbol = detectCurrencySymbol(rawRows, mapping);
+    applyCurrencyChoice();
     processed = rawRows.map(r=>{
       const keyword = String(r[mapping.keyword] ?? '').trim();
       const campaign = mapping.campaign ? String(r[mapping.campaign] ?? '').trim() : '未分组';
