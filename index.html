@@ -281,6 +281,7 @@
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="step-num">03</span>整体概览</div>
+        <div class="panel-hint" id="currencyHint"></div>
       </div>
       <div class="stat-grid" id="statGrid"></div>
     </section>
@@ -347,6 +348,7 @@
   let processed = [];
   let thresholds = {cvr:0.10, acos:0.30, minClicks:10};
   let activeTab = 'all';
+  let currencySymbol = '¥';
 
   const CATS = {
     scaleUp:   {label:'优选 · 加大投入', color:'#C98A00', bg:'#FBF1DC'},
@@ -518,12 +520,40 @@
     return n>1.5 ? n/100 : n;
   }
 
+  // ---------------- Currency detection ----------------
+  const CURRENCY_MAP = [
+    {symbol:'¥', tests:[/¥/, /\bRMB\b/i, /\bCNY\b/i, /\bCN¥/i]},
+    {symbol:'$', tests:[/\$/, /\bUSD\b/i]},
+    {symbol:'€', tests:[/€/, /\bEUR\b/i]},
+    {symbol:'£', tests:[/£/, /\bGBP\b/i]},
+    {symbol:'₹', tests:[/₹/, /\bINR\b/i]},
+    {symbol:'₩', tests:[/₩/, /\bKRW\b/i]},
+    {symbol:'฿', tests:[/฿/, /\bTHB\b/i]},
+    {symbol:'HK$', tests:[/\bHK\$/i, /\bHKD\b/i]},
+    {symbol:'A$', tests:[/\bA\$/i, /\bAUD\b/i]}
+  ];
+  function detectCurrencySymbol(rows, map){
+    const cols = [map.spend, map.sales].filter(Boolean);
+    for(const col of cols){
+      for(let i=0; i<Math.min(rows.length, 30); i++){
+        const raw = rows[i][col];
+        if(raw===undefined || raw===null || raw==='') continue;
+        const s = String(raw);
+        for(const c of CURRENCY_MAP){
+          if(c.tests.some(re=>re.test(s))) return c.symbol;
+        }
+      }
+    }
+    return '¥'; // 未检测到货币符号时的默认值
+  }
+
   // ---------------- Processing & classification ----------------
   function processRows(){
     if(!mapping.keyword || !mapping.clicks || !mapping.spend){
       alert('请至少映射 关键词 / 点击量 / 花费 三个必填字段');
       return false;
     }
+    currencySymbol = detectCurrencySymbol(rawRows, mapping);
     processed = rawRows.map(r=>{
       const keyword = String(r[mapping.keyword] ?? '').trim();
       const campaign = mapping.campaign ? String(r[mapping.campaign] ?? '').trim() : '未分组';
@@ -561,7 +591,7 @@
       }
       if(r.orders === 0){
         r.cat = 'negative';
-        r.action = '点击 '+r.clicks+' 次仍 0 转化，已消耗 ¥'+r.spend.toFixed(2)+' 未产出订单，建议加为否定精准/否定词组。';
+        r.action = '点击 '+r.clicks+' 次仍 0 转化，已消耗 '+currencySymbol+r.spend.toFixed(2)+' 未产出订单，建议加为否定精准/否定词组。';
         return;
       }
       const cvrOk = r.cvr >= tCvr;
@@ -606,6 +636,7 @@
   }
 
   function renderStats(){
+    document.getElementById('currencyHint').textContent = '识别到货币符号：'+currencySymbol+'（如不对，请检查花费/销售额列的原始数据）';
     const totalSpend = sum(processed.map(r=>r.spend));
     const totalSales = sum(processed.map(r=>r.sales));
     const totalOrders = sum(processed.map(r=>r.orders));
@@ -616,12 +647,12 @@
     const negSpend = sum(negatives.map(r=>r.spend));
 
     const cards = [
-      ['总花费', '¥'+totalSpend.toFixed(0), ''],
-      ['总销售额', '¥'+totalSales.toFixed(0), ''],
+      ['总花费', currencySymbol+totalSpend.toFixed(0), ''],
+      ['总销售额', currencySymbol+totalSales.toFixed(0), ''],
       ['整体 ACOS', pct(overallAcos), overallAcos<=thresholds.acos ? 'good':'bad'],
       ['整体转化率', pct(overallCvr), overallCvr>=thresholds.cvr ? 'good':'bad'],
       ['否定词候选数', negatives.length+' 个', negatives.length>0?'bad':''],
-      ['可回收花费(否定词)', '¥'+negSpend.toFixed(0), negSpend>0?'bad':'']
+      ['可回收花费(否定词)', currencySymbol+negSpend.toFixed(0), negSpend>0?'bad':'']
     ];
     document.getElementById('statGrid').innerHTML = cards.map(([label,value,cls])=>
       '<div class="stat-card"><div class="label">'+label+'</div><div class="value '+cls+'">'+value+'</div></div>'
@@ -683,7 +714,7 @@
         tooltip.style.display='block';
         tooltip.style.left = (e.offsetX+14)+'px';
         tooltip.style.top = (e.offsetY+10)+'px';
-        tooltip.innerHTML = '<b>'+escapeHtml(r.keyword)+'</b><br>CVR '+pct(r.cvr)+' · ACOS '+pct(r.acos)+'<br>花费 ¥'+r.spend.toFixed(2)+' · 订单 '+r.orders;
+        tooltip.innerHTML = '<b>'+escapeHtml(r.keyword)+'</b><br>CVR '+pct(r.cvr)+' · ACOS '+pct(r.acos)+'<br>花费 '+currencySymbol+r.spend.toFixed(2)+' · 订单 '+r.orders;
       });
       el.addEventListener('mouseleave', ()=>{ tooltip.style.display='none'; });
     });
@@ -736,7 +767,7 @@
       return '<tr>'+
         '<td class="kw-name">'+escapeHtml(r.keyword)+'<div style="font-weight:400;color:var(--ink-soft);font-size:11px;">'+escapeHtml(r.campaign)+'</div></td>'+
         '<td class="num">'+r.clicks+'</td>'+
-        '<td class="num">¥'+r.spend.toFixed(2)+'</td>'+
+        '<td class="num">'+currencySymbol+r.spend.toFixed(2)+'</td>'+
         '<td class="num">'+r.orders+'</td>'+
         '<td class="num">'+pct(r.cvr)+'</td>'+
         '<td class="num">'+pct(r.acos)+'</td>'+
@@ -777,7 +808,7 @@
       const shiftColor = c.dir==='up' ? 'var(--teal)' : 'var(--rust)';
       return '<div class="camp-row">'+
         '<div class="name">'+escapeHtml(c.name)+'<div style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">'+c.n+' 词 · 优选 '+c.scaleUp+' · 待清理 '+c.bad+'</div></div>'+
-        '<div class="num">¥'+c.spend.toFixed(0)+'</div>'+
+        '<div class="num">'+currencySymbol+c.spend.toFixed(0)+'</div>'+
         '<div class="num">'+pct(c.acos)+'</div>'+
         '<div class="bar-track"><div class="bar-fill" style="width:'+barPct+'%;background:'+barColor+'"></div></div>'+
         '<div class="shift" style="color:'+shiftColor+'">'+shiftTxt+'</div>'+
